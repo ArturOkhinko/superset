@@ -1,0 +1,134 @@
+# =============================================================================
+# Production-like Superset 6.1.0 stack.
+#
+#   nginx     -> TLS-terminating reverse proxy, strips the /superset/ prefix
+#   superset  -> Gunicorn web server (custom image)
+#   worker    -> Celery worker (async queries, alerts & reports)
+#   beat      -> Celery beat scheduler
+#   db        -> Postgres metadata database
+#   redis     -> cache + Celery broker/result backend
+#   init      -> one-shot: db migrations, admin bootstrap, roles, examples
+#
+# This imitates a production deployment: separate web/worker/scheduler
+# processes, external metadata DB and Redis, and a reverse proxy in front.
+# It is NOT hardened for the public internet as-is (see README "Production").
+# =============================================================================
+
+x-superset-image: &superset-image custom-superset:6.1.0
+x-superset-build: &superset-build
+  context: .
+  dockerfile: Dockerfile
+  args:
+    SUPERSET_VERSION: "6.1.0"
+
+x-superset-env: &superset-env
+  DATABASE_HOST: db
+  DATABASE_PORT: "5432"
+  DATABASE_DB: superset
+  DATABASE_USER: superset
+  DATABASE_PASSWORD: ${DATABASE_PASSWORD:-superset}
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?set SUPERSET_SECRET_KEY in .env}
+  SUPERSET_DEFAULT_DASHBOARD_ID: ${SUPERSET_DEFAULT_DASHBOARD_ID:-1}
+  SUPERSET_APP_NAME: ${SUPERSET_APP_NAME:-DataHub Analytics}
+  PYTHONPATH: /app/pythonpath
+  SUPERSET_CONFIG_PATH: /app/pythonpath/superset_config.py
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      - superset
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+
+  superset:
+    image: *superset-image
+    build: *superset-build
+    command: >
+      gunicorn --bind 0.0.0.0:8088 --workers 4 --worker-class gthread
+      --threads 20 --timeout 120 --limit-request-line 0 --limit-request-field_size 0
+      "superset.app:create_app()"
+    environment: *superset-env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  worker:
+    image: *superset-image
+    command: celery --app=superset.tasks.celery_app:app worker -O fair -c 4
+    environment: *superset-env
+    depends_on:
+      - superset
+      - redis
+      - db
+    restart: unless-stopped
+
+  beat:
+    image: *superset-image
+    command: celery --app=superset.tasks.celery_app:app beat --pidfile /tmp/celerybeat.pid -s /tmp/celerybeat-schedule
+    environment: *superset-env
+    depends_on:
+      - superset
+      - redis
+      - db
+    restart: unless-stopped
+
+  init:
+    image: *superset-image
+    build: *superset-build
+    command: ["/bin/bash", "-c", "/app/docker/docker-init.sh"]
+    environment:
+      <<: *superset-env
+      SUPERSET_ADMIN_USERNAME: ${SUPERSET_ADMIN_USERNAME:-admin}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:-admin}
+      SUPERSET_ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL:-admin@example.com}
+      SUPERSET_ADMIN_FIRST: Superset
+      SUPERSET_ADMIN_LAST: Admin
+      SUPERSET_LOAD_EXAMPLES: ${SUPERSET_LOAD_EXAMPLES:-yes}
+    volumes:
+      - ./docker/docker-init.sh:/app/docker/docker-init.sh:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: superset
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-superset}
+    volumes:
+      - db_home:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U superset"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_home:/data
+    restart: unless-stopped
+
+volumes:
+  db_home:
+  redis_home:
