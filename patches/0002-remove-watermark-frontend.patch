@@ -1,0 +1,26 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] feat(menu): remove "Powered by Apache Superset" watermark
+
+Source-level alternative to the runtime COMMON_BOOTSTRAP_OVERRIDES_FUNC
+override. Removes the watermark line from the Settings -> About group so the
+text is never rendered regardless of which logo is configured.
+
+Requires a frontend rebuild (the Dockerfile "Building from source" path).
+
+---
+ .../src/features/home/RightMenu.tsx           | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/superset-frontend/src/features/home/RightMenu.tsx b/superset-frontend/src/features/home/RightMenu.tsx
+index 0000000..0000000 100644
+--- a/superset-frontend/src/features/home/RightMenu.tsx
++++ b/superset-frontend/src/features/home/RightMenu.tsx
+@@ -547,8 +547,6 @@ const RightMenu = ({
+                   `}
+                 >
+                   {[
+-                    navbarRight.show_watermark &&
+-                      t('Powered by Apache Superset'),
+                     navbarRight.version_string &&
+                       `${t('Version')}: ${navbarRight.version_string}`,
+                     navbarRight.version_sha &&
