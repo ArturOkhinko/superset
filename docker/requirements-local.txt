@@ -1,0 +1,5 @@
+# PR: feat/clickhouse-connect
+# Extra Python packages baked into the production image.
+# clickhouse-connect is the official ClickHouse driver used by Superset's
+# ClickHouse Connect engine spec.
+clickhouse-connect
